@@ -49,17 +49,12 @@ func main() {
 		Endpoint:     google.Endpoint,
 	}
 
-	authCodeChan := make(chan string)
-	go waitforthething(authCodeChan)
-
 	url := conf.AuthCodeURL("stsidofjosjfkjsailfkljsadfate")
 	fmt.Printf("visit the url for the auth dialog %v\n", url)
 
-	var code string
-	select {
-	case code = <-authCodeChan:
-	case <-time.After(20 * time.Second):
-		fmt.Println("too slow")
+	code, err := waitForAuthCode()
+	if err != nil {
+		panic("error")
 	}
 
 	ctx := context.Background()
@@ -75,21 +70,46 @@ func main() {
 		panic("unable to get yt service: " + err.Error())
 	}
 
-	c := ytService.Videos.List([]string{"id"})
-	c.Chart("chartUnspecified")
-
-	vlr, err := c.Do()
+	//get channel for authenticated user
+	c := ytService.Channels.List([]string{"snippet", "contentDetails"})
+	c.Mine(true)
+	channel, err := c.Do()
 	if err != nil {
 		panic(err.Error())
 	}
+	if channel.Items == nil {
+		panic("no items in channels list")
+	}
+	uploadsPlaylistID := channel.Items[0].ContentDetails.RelatedPlaylists.Uploads
+	if uploadsPlaylistID == "" {
+		panic("no channel id in channel return")
+	}
+	fmt.Println("retrieved id for channel " + channel.Items[0].Snippet.Title)
 
-	json.NewEncoder(os.Stdout).Encode(vlr)
+	vidsRequest := ytService.PlaylistItems.List([]string{"id","status","snippet", "contentDetails"})
+	vidsRequest.PlaylistId(uploadsPlaylistID)
+	abc, err := vidsRequest.Do()
+	if err != nil {
+		panic("unable to complete video list request" + err.Error())
+	}
+
+	json.NewEncoder(os.Stdout).Encode(abc)
 
 }
 
-func waitforthething(c chan string) {
+func waitForAuthCode() (string, error) {
+	c := make(chan string)
 	http.HandleFunc("/thing", func(_ http.ResponseWriter, r *http.Request) {
 		c <- r.URL.Query().Get("code")
 	})
-	http.ListenAndServe(":8080", nil)
+	go http.ListenAndServe(":8080", nil)
+
+	var code string
+	select {
+	case code = <-c:
+	case <-time.After(20 * time.Second):
+		return "", fmt.Errorf("too slow")
+	}
+
+	return code, nil
 }
